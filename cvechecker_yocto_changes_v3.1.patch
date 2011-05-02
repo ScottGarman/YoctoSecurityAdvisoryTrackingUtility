@@ -1,0 +1,70 @@
+This changeset adds a -Y option to cvecker, which only performs checks
+against the product (package) name, and ignores the vendor, version,
+etc fields, which I found were unpredictable and led to unreliability
+in the output.
+
+I also had to increase SQLLINESIZE to avoid buffer overruns given the
+large amounts of output the program would generate.
+
+This patch is known to apply to cvechecker v3.1; future versions may
+require porting.
+
+Signed-off-by: Scott Garman <scott.a.garman@intel.com>
+diff -urN cvechecker-3.1.orig/src/cvecheck.c cvechecker-3.1/src/cvecheck.c
+--- cvechecker-3.1.orig/src/cvecheck.c	2011-04-12 09:21:15.000000000 -0700
++++ cvechecker-3.1/src/cvecheck.c	2011-04-25 16:42:53.346770974 -0700
+@@ -1369,6 +1369,9 @@
+ 	  case 'H':
+ 	    arguments->reporthigher = 1;
+ 	    break;
++	  case 'Y':
++	    arguments->reportproductonly = 1;
++	    break;
+ 	  default:
+ 	    return ARGP_ERR_UNKNOWN;
+ 	};
+diff -urN cvechecker-3.1.orig/src/cvecheck_common.h cvechecker-3.1/src/cvecheck_common.h
+--- cvechecker-3.1.orig/src/cvecheck_common.h	2011-04-12 14:15:14.000000000 -0700
++++ cvechecker-3.1/src/cvecheck_common.h	2011-04-25 16:43:50.877770072 -0700
+@@ -24,7 +24,7 @@
+ #define CPELINESIZE (7 + FIELDSIZE*6 + 5)
+ #define VERSIONLINESIZE (FILENAMESIZE*2 + 5 + CPELINESIZE)
+ // Normally, around 1800 ought to be enough (largest SELECT statement with assumption of largest values)
+-#define SQLLINESIZE 4096
++#define SQLLINESIZE 8192
+ 
+ enum database_types {
+   sqlite,
+@@ -51,6 +51,7 @@
+ 	int deltaonly;
+ 	int deletedeltaonly;
+ 	int reporthigher;
++	int reportproductonly;
+ };
+ 
+ struct cpe_data {
+diff -urN cvechecker-3.1.orig/src/cvecheck.h cvechecker-3.1/src/cvecheck.h
+--- cvechecker-3.1.orig/src/cvecheck.h	2011-04-13 09:16:37.000000000 -0700
++++ cvechecker-3.1/src/cvecheck.h	2011-04-25 16:44:19.756770713 -0700
+@@ -48,6 +48,7 @@
+ 	{"loaddata", 'l', "datafile", 0, "Load version gathering data file" },
+ 	{"runcheck", 'r', 0, 0, "Execute the checks (match installed software with CVEs)" }, 
+ 	{"reporthigher", 'H', 0, 0, "Report also when CVEs have been detected for higher versions" },
++	{"reportproductonly", 'Y', 0, 0, "Report only using product names for comparison"},
+ 	{"fileinfo", 'f', "binfile", 0, "File to obtain detected CPE of" },
+ 	{"initdbs", 'i', 0, 0, "Initialize all databases" },
+ 	{"csvoutput", 'C', 0, 0, "Use (parseable) CSV output" },
+diff -urN cvechecker-3.1.orig/src/sqlite3/sqlite3_impl.c cvechecker-3.1/src/sqlite3/sqlite3_impl.c
+--- cvechecker-3.1.orig/src/sqlite3/sqlite3_impl.c	2011-04-12 12:59:17.000000000 -0700
++++ cvechecker-3.1/src/sqlite3/sqlite3_impl.c	2011-04-25 16:45:50.254768859 -0700
+@@ -717,7 +717,9 @@
+    * the current one. 
+    */
+ 
+-  if (ws->arg->reporthigher == 0) {
++  if (ws->arg->reportproductonly == 1) {
++    sprintf(stmt, "select a.cpeid as cpeid, b.cpeid as parentcpeid from tb_cpe_%c_%d a, tb_cpe_%c_%d b where (b.cpeid = %d) and (a.cpeproduct = b.cpeproduct);", cpepart, cpevendorlength, cpepart, cpevendorlength, cpe);
++  } else if (ws->arg->reporthigher == 0) {
+     sprintf(stmt, "select a.cpeid as cpeid, b.cpeid as parentcpeid from tb_cpe_%c_%d a, tb_cpe_%c_%d b where (b.cpeid = %d) and (a.cpevendor = b.cpevendor) and (a.cpeproduct = b.cpeproduct) and (a.cpeversion = b.cpeversion) and ( (a.cpeedition = b.cpeedition) or ( (a.cpeedition <> 1 ) and (b.cpeedition == 0) ) ) and ( (a.cpeupdate = b.cpeupdate) or ( (a.cpeupdate <> 0 ) and (b.cpeupdate == 0 ) ) ) and ( (a.cpelanguage = b.cpelanguage) or ( (a.cpelanguage <> 0) and (b.cpelanguage == 0 ) ) );", cpepart, cpevendorlength, cpepart, cpevendorlength, cpe);
+   } else {
+     sprintf(stmt, "select a.cpeid as cpeid, b.cpeid as parentcpeid from tb_cpe_%c_%d a, tb_cpe_%c_%d b, tb_cpe_versions c, tb_cpe_versions d where "
